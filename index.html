@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAI API Terminal with Pomodoro</title>
+    <style>
+        body {
+            font-family: monospace;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+        }
+        #output {
+            white-space: pre-wrap;
+            margin-bottom: 20px;
+        }
+        #input {
+            width: 100%;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            border: none;
+            outline: none;
+            font-family: monospace;
+        }
+        .user-input { color: #569cd6; }
+        .assistant-response { color: #4ec9b0; }
+        .error { color: #f44747; }
+
+        #pomodoro {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: #2d2d2d;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            color: #4ec9b0;
+            border: 2px solid #4ec9b0;
+            box-shadow: 0 0 10px rgba(78, 201, 176, 0.5);
+        }
+        #timer {
+            font-size: 24px;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        #pomodoro button {
+            background-color: #1e1e1e;
+            color: #4ec9b0;
+            border: 1px solid #4ec9b0;
+            padding: 5px 10px;
+            margin: 0 5px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        #pomodoro button:hover {
+            background-color: #4ec9b0;
+            color: #1e1e1e;
+        }
+
+        pre {
+            background-color: #2d2d2d;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+            max-width: 75%; /* Adjust this value to change the width */
+            margin: 10px auto; /* Centers the code block */
+        }
+
+        code {
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em; /* Slightly smaller font size */
+            line-height: 1.4; /* Tighter line spacing */
+            display: block;
+            white-space: pre-wrap; /* Allows text to wrap */
+        }
+    </style>
+</head>
+<body>
+    <div id="output"></div>
+    <input type="text" id="input" autofocus>
+    
+    <!-- Add this button just above the Pomodoro timer div -->
+    <button id="clearBtn" style="position: fixed; bottom: 120px; right: 20px; background-color: #1e1e1e; color: #4ec9b0; border: 1px solid #4ec9b0; padding: 5px 10px; cursor: pointer; font-family: 'Courier New', monospace;">Clear Conversation</button>
+    
+    <!-- Add this Pomodoro timer -->
+    <div id="pomodoro">
+        <div id="timer">25:00</div>
+        <button id="startBtn">Start</button>
+        <button id="pauseBtn">Pause</button>
+    </div>
+
+    <script>
+        const output = document.getElementById('output');
+        const input = document.getElementById('input');
+        const apiKey = 'YOUR_OPENAI_API_KEY';
+
+        // Add this line to store the conversation history
+        let conversationHistory = [{"role": "system", "content": "You are a python code tutor. Provide ONLY 1 code snippet per response. Ask the user to explain or ask 1 related questions about the code. ALWAYS ANSWER the user's question before moving on to the next code snippet (VERY IMPORTANT). Use Markdown codeblocks to display code snippets."}];
+
+        function renderCodeBlock(code, language) {
+            return `<pre><code class="language-${language || ''}">${code}</code></pre>`;
+        }
+
+        input.addEventListener('keydown', async (e) => {
+            if (e.key === 'Enter') {
+                const userInput = input.value;
+                input.value = '';
+                output.innerHTML += `<span class="user-input">> ${userInput}</span>\n`;
+
+                // Add user message to conversation history
+                conversationHistory.push({"role": "user", "content": userInput});
+
+                try {
+                    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${apiKey}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            model: "gpt-4o-mini",
+                            messages: conversationHistory,
+                            stream: true
+                        })
+                    });
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let assistantResponse = '';
+                    let inCodeBlock = false;
+                    let currentCodeBlock = '';
+                    let currentLanguage = '';
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        const chunk = decoder.decode(value);
+                        const lines = chunk.split('\n');
+                        const parsedLines = lines
+                            .map(line => line.replace(/^data: /, '').trim())
+                            .filter(line => line !== '' && line !== '[DONE]')
+                            .map(line => JSON.parse(line));
+
+                        for (const parsedLine of parsedLines) {
+                            const { choices } = parsedLine;
+                            const { delta } = choices[0];
+                            const { content } = delta;
+                            if (content) {
+                                assistantResponse += content;
+
+                                if (content.includes('```')) {
+                                    const parts = content.split('```');
+                                    parts.forEach((part, index) => {
+                                        if (index % 2 === 0) {
+                                            // Outside code block
+                                            if (inCodeBlock) {
+                                                output.innerHTML += renderCodeBlock(currentCodeBlock, currentLanguage);
+                                                inCodeBlock = false;
+                                                currentCodeBlock = '';
+                                                currentLanguage = '';
+                                            }
+                                            output.innerHTML += `<span class="assistant-response">${part}</span>`;
+                                        } else {
+                                            // Inside code block
+                                            inCodeBlock = true;
+                                            const languageMatch = part.match(/^(\w+)\n/);
+                                            if (languageMatch) {
+                                                currentLanguage = languageMatch[1];
+                                                currentCodeBlock = part.slice(languageMatch[0].length);
+                                            } else {
+                                                currentCodeBlock = part;
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    if (inCodeBlock) {
+                                        currentCodeBlock += content;
+                                    } else {
+                                        output.innerHTML += `<span class="assistant-response">${content}</span>`;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (inCodeBlock) {
+                        output.innerHTML += renderCodeBlock(currentCodeBlock, currentLanguage);
+                    }
+
+                    // After processing the entire response, add it to the conversation history
+                    conversationHistory.push({"role": "assistant", "content": assistantResponse});
+
+                    output.innerHTML += '\n\n';
+                } catch (error) {
+                    output.innerHTML += `<span class="error">Error: ${error.message}</span>\n\n`;
+                }
+            }
+        });
+
+        // Add this Pomodoro timer script
+        const timer = document.getElementById('timer');
+        const startBtn = document.getElementById('startBtn');
+        const pauseBtn = document.getElementById('pauseBtn');
+        let countdown;
+        let timeLeft = 25 * 60; // 25 minutes in seconds
+        let isBreak = false;
+
+        function updateTimer() {
+            const minutes = Math.floor(timeLeft / 60);
+            const seconds = timeLeft % 60;
+            timer.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function startTimer() {
+            clearInterval(countdown);
+            countdown = setInterval(() => {
+                if (timeLeft > 0) {
+                    timeLeft--;
+                    updateTimer();
+                } else {
+                    clearInterval(countdown);
+                    if (!isBreak) {
+                        alert('Work session completed! Starting 5-minute break.');
+                        isBreak = true;
+                        timeLeft = 5 * 60; // 5 minutes in seconds
+                        startTimer();
+                    } else {
+                        playAlarm();
+                        alert('Break time over! Ready to start another work session?');
+                        isBreak = false;
+                        timeLeft = 25 * 60; // Reset to 25 minutes
+                        updateTimer();
+                    }
+                }
+            }, 1000);
+        }
+
+        function pauseTimer() {
+            clearInterval(countdown);
+        }
+
+        function resetTimer() {
+            clearInterval(countdown);
+            isBreak = false;
+            timeLeft = 25 * 60;
+            updateTimer();
+        }
+
+        function playAlarm() {
+            const audio = new Audio('data:audio/wav;base64,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qJrx4KOQjahZxWbcZgztj2c49nKmkId44S71j0c8eV9yDK6uPRzx5X18eDvjvQ6yKo9ZSS6l//8elePK/Lf//IInrOF/FvDoADYAGBMGb7FtErm5MXMlmPAJQVgWta7Zx2go+8xJ0UiCb8LHHdftWyLJE0QIAIsI+UbXu67dZMjmgDGCGl1H+vpF4NSDckSIkk7Vd+sxEhBQMRU8j/12UIRhzSaUdQ+rQU5kGeFxm+hb1oh6pWWmv3uvmReDl0UnvtapVaIzo1jZbf/pD6ElLqSX+rUmOQNpJFa/r+sa4e/pBlAABoAAAAA3CUgShLdGIxsY7AUABPRrgCABdDuQ5GC7DqPQCgbbJUAoRSUj+NIEig0YfyWUho1VBBBA//uQZB4ABZx5zfMakeAAAAmwAAAAF5F3P0w9GtAAACfAAAAAwLhMDmAYWMgVEG1U0FIGCBgXBXAtfMH10000EEEEEECUBYln03TTTdNBDZopopYvrTTdNa325mImNg3TTPV9q3pmY0xoO6bv3r00y+IDGid/9aaaZTGMuj9mpu9Mpio1dXrr5HERTZSmqU36A3CumzN/9Robv/Xx4v9ijkSRSNLQhAWumap82WRSBUqXStV/YcS+XVLnSS+WLDroqArFkMEsAS+eWmrUzrO0oEmE40RlMZ5+ODIkAyKAGUwZ3mVKmcamcJnMW26MRPgUw6j+LkhyHGVGYjSUUKNpuJUQoOIAyDvEyG8S5yfK6dhZc0Tx1KI/gviKL6qvvFs1+bWtaz58uUNnryq6kt5RzOCkPWlVqVX2a/EEBUdU1KrXLf40GoiiFXK///qpoiDXrOgqDR38JB0bw7SoL+ZB9o1RCkQjQ2CBYZKd/+VJxZRRZlqSkKiws0WFxUyCwsKiMy7hUVFhIaCrNQsKkTIsLivwKKigsj8XYlwt/WKi2N4d//uQRCSAAjURNIHpMZBGYiaQPSYyAAABLAAAAAAAACWAAAAApUF/Mg+0aohSIRobBAsMlO//Kk4soosy1JSFRYWaLC4qZBYWFRGZdwqKiwkNBVmoWFSJkWFxX4FFRQWR+LsS4W/rFRb/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////VEFHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAU291bmRib3kuZGUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMjAwNGh0dHA6Ly93d3cuc291bmRib3kuZGUAAAAAAAAAACU=');
+            audio.play();
+            setTimeout(() => audio.pause(), 5000); // Play for 5 seconds
+        }
+
+        startBtn.addEventListener('click', startTimer);
+        pauseBtn.addEventListener('click', pauseTimer);
+
+        // Add this new function to clear the conversation
+        function clearConversation() {
+            conversationHistory = [{"role": "system", "content": "You are a Python Code Tutor. Provide ONLY 1 code snippet per response. Ask the user to explain or ask 1 related questions about the code. ALWAYS ANSWER the user's question before moving on to the next code snippet (VERY IMPORTANT). Use Markdown codeblocks to display code snippets."}];
+            output.innerHTML = '';
+            input.value = '';
+        }
+
+        // Add this line to get the clear button element
+        const clearBtn = document.getElementById('clearBtn');
+
+        // Add this event listener for the clear button
+        clearBtn.addEventListener('click', clearConversation);
+
+        // Initialize timer display
+        updateTimer();
+    </script>
+</body>
+</html>
